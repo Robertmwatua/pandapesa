@@ -1,2 +1,2 @@
-api/db.php
-api/payhero-config.php
+schema.sql
+local.env.sh

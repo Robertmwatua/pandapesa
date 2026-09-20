@@ -1,11 +1,11 @@
 <?php
-// Copy this file to db.php for local dev, or set these same names as
-// Azure App Service Application Settings in production — either way
-// PHP picks them up via getenv().
+// No real credentials here on purpose — this file is committed. Real values
+// come from environment variables: Azure App Service Application Settings in
+// production, or a local shell export (see local.env.sh, gitignored) in dev.
 $DB_HOST = getenv('DB_HOST') ?: 'localhost';
 $DB_NAME = getenv('DB_NAME') ?: 'pandapesa';
 $DB_USER = getenv('DB_USER') ?: 'pandapesa_user';
-$DB_PASS = getenv('DB_PASS') ?: 'changeme';
+$DB_PASS = getenv('DB_PASS') ?: '';
 
 try {
     $pdo = new PDO(
