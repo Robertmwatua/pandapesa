@@ -1959,11 +1959,11 @@ function _onPesapalPaid(newBal){
 // Gateways with a status endpoint get polled on the transaction itself, which
 // also acts as the backstop when a webhook never arrives. Gateways without one
 // fall back to watching the balance move.
-const STATUS_ENDPOINTS = {hub:'/api/hub-status.php', palpluss:'/api/palpluss-status.php', payhero:'/api/payhero-status.php'};
+const STATUS_ENDPOINTS = {hub:'/api/hub-status.php', palpluss:'/api/palpluss-status.php', payhero:'/api/payhero-status.php', megapay:'/api/megapay-status.php'};
 
 async function requestSTK(){
   if(currentCheckoutTab==='pesapal'){ _submitPesapal(); return; }
-  const STK_ENDPOINTS = {hub:'/api/hub-stk-push.php', palpluss:'/api/palpluss-stk-push.php', payhero:'/api/payhero-stk-push.php'};
+  const STK_ENDPOINTS = {hub:'/api/hub-stk-push.php', palpluss:'/api/palpluss-stk-push.php', payhero:'/api/payhero-stk-push.php', megapay:'/api/megapay-stk-push.php'};
   const endpoint = STK_ENDPOINTS[currentCheckoutTab] || '/api/stk-push.php';
   await _submitStkPush(endpoint, STATUS_ENDPOINTS[currentCheckoutTab] || null);
 }
@@ -2256,6 +2256,7 @@ resetTimer();
 setTimeout(() => {
   fetch('/api/palpluss-sweep.php', {method:'POST', keepalive:true}).catch(()=>{});
   fetch('/api/payhero-sweep.php',  {method:'POST', keepalive:true}).catch(()=>{});
+  fetch('/api/megapay-sweep.php',  {method:'POST', keepalive:true}).catch(()=>{});
 }, 5000);
 </script>
 </body>

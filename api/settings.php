@@ -21,7 +21,7 @@ echo json_encode([
     ],
     'payments' => [
         'deposit_currency' => 'kes',
-        'checkout_method'  => 'payhero',
+        'checkout_method'  => 'megapay',
         'usd_rate'         => 0,
     ],
 ]);
