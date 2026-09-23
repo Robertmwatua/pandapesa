@@ -20,8 +20,8 @@ switch ($action) {
             echo json_encode(['error' => 'Invalid amount.']);
             break;
         }
-        if ($amount < 100) {
-            echo json_encode(['error' => 'Minimum withdrawal is KES 100.']);
+        if ($amount < 10) {
+            echo json_encode(['error' => 'Minimum withdrawal is KES 10.']);
             break;
         }
 

@@ -2132,7 +2132,7 @@ async function submitWithdrawal(){
 
   // Client-side validation (server enforces too, but this gives instant feedback).
   // Phone is no longer on the client — server uses the registered phone on the user record.
-  if (amount < 100) { status.innerHTML = '<span style="color:var(--red)">Minimum withdrawal is KES 100</span>'; return; }
+  if (amount < 10) { status.innerHTML = '<span style="color:var(--red)">Minimum withdrawal is KES 10</span>'; return; }
   if (amount > balance) { status.innerHTML = '<span style="color:var(--red)">Amount exceeds your balance</span>'; return; }
 
   btn.disabled = true; btn.textContent = 'Submitting...';
