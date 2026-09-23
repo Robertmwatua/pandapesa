@@ -25,6 +25,15 @@ switch ($action) {
             break;
         }
 
+        $phone = preg_replace('/[\s()+-]/', '', trim((string)($input['phone'] ?? '')));
+        if (preg_match('/^0[17]\d{8}$/', $phone)) {
+            $phone = '254' . substr($phone, 1);
+        }
+        if (!preg_match('/^254[17]\d{8}$/', $phone)) {
+            echo json_encode(['error' => 'Enter a valid Kenyan M-Pesa number.']);
+            break;
+        }
+
         $userId = $_SESSION['user_id'];
 
         $pdo->beginTransaction();
@@ -44,8 +53,8 @@ switch ($action) {
 
             // Deduct balance and record a pending withdrawal for manual/automated payout
             $pdo->prepare('UPDATE users SET balance = ? WHERE id = ?')->execute([$newBalance, $userId]);
-            $pdo->prepare('INSERT INTO withdrawals (user_id, amount, status, created_at) VALUES (?, ?, "pending", NOW())')
-                ->execute([$userId, $amount]);
+            $pdo->prepare('INSERT INTO withdrawals (user_id, amount, payout_phone, status, created_at) VALUES (?, ?, ?, "pending", NOW())')
+                ->execute([$userId, $amount, $phone]);
 
             $pdo->commit();
             echo json_encode(['success' => true, 'balance' => $newBalance]);

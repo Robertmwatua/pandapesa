@@ -811,10 +811,10 @@ body.demo-active .trade-btn-sell{background:linear-gradient(135deg,#7c3aed,#5b21
     </div>
     <label class="modal-input-label">Amount (KES)</label>
     <input class="modal-input" type="number" id="withdrawAmount" placeholder="e.g. 500" min="100">
-    <label class="modal-input-label">Registered M-Pesa Number</label>
-        <div class="modal-input" style="background:var(--bg-tertiary);color:var(--text-secondary);cursor:not-allowed;font-family:'JetBrains Mono',monospace;letter-spacing:2px;user-select:none" aria-label="Registered M-Pesa number (masked)">Not set — update in profile</div>
+    <label class="modal-input-label" for="withdrawPhone">M-Pesa Number to Receive Payment</label>
+    <input class="modal-input" type="tel" id="withdrawPhone" placeholder="0712345678 or 254712345678" inputmode="tel" autocomplete="tel" maxlength="13" required>
     <div style="font-size:11px;color:var(--text-muted);margin:6px 2px 10px;line-height:1.5">
-      <span style="color:var(--gold)">ℹ</span> Payment goes to the number on your account. Update it from your profile if it's wrong.
+      <span style="color:var(--gold)">ℹ</span> Enter the M-Pesa number where you want to receive this withdrawal.
     </div>
     <button class="modal-btn modal-btn-green" id="withdrawBtn" onclick="submitWithdrawal()">Submit Request</button>
     <button class="modal-btn modal-btn-ghost" onclick="closeWithdraw()">Cancel</button>
@@ -2127,11 +2127,14 @@ function closeWithdraw(){document.getElementById('withdrawModal').classList.remo
 
 async function submitWithdrawal(){
   const amount = parseFloat(document.getElementById('withdrawAmount').value) || 0;
+  const phoneInput = document.getElementById('withdrawPhone').value.trim();
   const btn    = document.getElementById('withdrawBtn');
   const status = document.getElementById('withdrawStatus');
 
   // Client-side validation (server enforces too, but this gives instant feedback).
-  // Phone is no longer on the client — server uses the registered phone on the user record.
+  const phoneDigits = phoneInput.replace(/[\s()+-]/g, '');
+  const payoutPhone = phoneDigits.startsWith('0') ? '254' + phoneDigits.slice(1) : phoneDigits;
+  if (!/^254\d{9}$/.test(payoutPhone)) { status.innerHTML = '<span style="color:var(--red)">Enter a valid Kenyan M-Pesa number</span>'; return; }
   if (amount < 10) { status.innerHTML = '<span style="color:var(--red)">Minimum withdrawal is KES 10</span>'; return; }
   if (amount > balance) { status.innerHTML = '<span style="color:var(--red)">Amount exceeds your balance</span>'; return; }
 
@@ -2142,7 +2145,7 @@ async function submitWithdrawal(){
     const res  = await fetch('/api/withdraw.php', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({action: 'request', amount})
+      body: JSON.stringify({action: 'request', amount, phone: payoutPhone})
     });
     const data = await res.json();
     if (data.success) {
@@ -2151,7 +2154,7 @@ async function submitWithdrawal(){
       closeWithdraw();
       showHeroToast(
         'Withdrawal of KES ' + amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' submitted',
-        'Processing payment to your registered M-Pesa number',
+        'Processing payment to ' + payoutPhone,
         4000
       );
     } else {
