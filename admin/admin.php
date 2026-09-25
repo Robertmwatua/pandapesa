@@ -117,6 +117,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if (($_POST['action'] ?? '') === 'ban_user') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        if ($userId < 1) {
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Invalid user ID.'];
+            header('Location: /admin/admin.php?view=users');
+            exit;
+        }
+        try {
+            $stmt = $pdo->prepare('UPDATE users SET banned = 1 WHERE id = ? AND banned = 0');
+            $stmt->execute([$userId]);
+            $_SESSION['admin_flash'] = ['type' => 'success', 'message' => $stmt->rowCount() === 1 ? 'User banned. Their account access is now blocked.' : 'User does not exist or was already banned.'];
+        } catch (Throwable $e) {
+            error_log('Admin ban user failed: ' . $e->getMessage());
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Could not ban user. Ensure the banned-column migration has been applied.'];
+        }
+        header('Location: /admin/admin.php?view=users');
+        exit;
+    }
+
+    if (($_POST['action'] ?? '') === 'unban_user') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        if ($userId < 1) {
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Invalid user ID.'];
+            header('Location: /admin/admin.php?view=users');
+            exit;
+        }
+        try {
+            $stmt = $pdo->prepare('UPDATE users SET banned = 0 WHERE id = ? AND banned = 1');
+            $stmt->execute([$userId]);
+            $_SESSION['admin_flash'] = ['type' => 'success', 'message' => $stmt->rowCount() === 1 ? 'User unbanned. They can sign in again.' : 'User was not banned or does not exist.'];
+        } catch (Throwable $e) {
+            error_log('Admin unban user failed: ' . $e->getMessage());
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Could not unban user. Ensure the banned-column migration has been applied.'];
+        }
+        header('Location: /admin/admin.php?view=users');
+        exit;
+    }
+
     $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Unknown admin action.'];
     header('Location: /admin/admin.php');
     exit;
@@ -130,6 +168,9 @@ if ($period === 'custom' && (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !pre
     $period = 'today';
 }
 $periodLabel = ['today' => 'Today', '7d' => 'Last 7 days', '30d' => 'Last 30 days', 'all' => 'All time', 'custom' => $from . ' to ' . $to][$period];
+
+$view = (string)($_GET['view'] ?? 'overview');
+if (!in_array($view, ['overview', 'users'], true)) $view = 'overview';
 
 $statsLoaded = false;
 $totalUsers = 0;
@@ -218,6 +259,43 @@ try {
 } catch (PDOException $e) {
     error_log('Admin announcement read failed: ' . $e->getMessage());
 }
+
+$search = trim((string)($_GET['search'] ?? ''));
+$page = max(1, (int)($_GET['page'] ?? 1));
+$usersLimit = 50;
+$usersOffset = ($page - 1) * $usersLimit;
+$usersLoaded = false;
+$usersList = [];
+$usersTotalCount = 0;
+$usersPageCount = 1;
+$bannedCount = 0;
+
+if ($view === 'users') {
+    $searchWhere = '';
+    $searchParams = [];
+    if ($search !== '') {
+        $searchWhere = "u.username LIKE CONCAT('%', ?, '%') OR u.email LIKE CONCAT('%', ?, '%') OR u.phone LIKE CONCAT('%', ?, '%')";
+        $searchParams = [$search, $search, $search];
+    }
+    $whereClause = $searchWhere !== '' ? "WHERE $searchWhere" : '';
+
+    try {
+        $countStmt = $pdo->prepare("SELECT COUNT(*) FROM users u $whereClause");
+        $countStmt->execute($searchParams);
+        $usersTotalCount = (int)$countStmt->fetchColumn();
+        $bannedCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE banned = 1')->fetchColumn();
+        $usersPageCount = max(1, (int)ceil($usersTotalCount / $usersLimit));
+        $page = min($page, $usersPageCount);
+        $usersOffset = ($page - 1) * $usersLimit;
+
+        $stmt = $pdo->prepare("SELECT u.id, u.username, u.email, u.phone, u.balance, u.created_at, u.banned, COALESCE(t.trade_count,0) AS trade_count, COALESCE(d.deposit_count,0) AS deposit_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS trade_count FROM trades WHERE result IN ('win','loss') GROUP BY user_id) t ON t.user_id = u.id LEFT JOIN (SELECT user_id, COUNT(*) AS deposit_count FROM deposits WHERE status = 'completed' GROUP BY user_id) d ON d.user_id = u.id $whereClause ORDER BY u.created_at DESC LIMIT $usersLimit OFFSET $usersOffset");
+        $stmt->execute($searchParams);
+        $usersList = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $usersLoaded = true;
+    } catch (PDOException $e) {
+        error_log('Admin users query failed: ' . $e->getMessage());
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -240,8 +318,15 @@ try {
       <a href="/admin/logout.php" class="text-red-400 hover:text-red-300 font-medium">Logout</a>
     </div>
   </header>
+  <nav class="bg-gray-900/60 border-b border-gray-800" style="font-family:'Space Grotesk'">
+    <div class="max-w-7xl mx-auto px-6 flex items-center gap-1">
+      <a href="/admin/admin.php?view=overview" class="<?= $view === 'overview' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' ?> px-4 py-2 text-sm font-medium rounded-t-lg transition">Financial Overview</a>
+      <a href="/admin/admin.php?view=users" class="<?= $view === 'users' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800' ?> px-4 py-2 text-sm font-medium rounded-t-lg transition">Registered Users</a>
+    </div>
+  </nav>
 
   <main class="max-w-7xl mx-auto p-6">
+    <?php if ($view === 'overview'): ?>
     <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
       <div>
         <h1 class="text-2xl font-bold" style="font-family:'Space Grotesk'">Financial Overview</h1>
@@ -352,6 +437,93 @@ try {
     </section>
 
     <div class="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-sm text-blue-200 mb-6"><strong>Accounting note:</strong> the ledger residual uses all-time completed deposits minus completed withdrawals, current player balances, pending withdrawals, and open trade stakes. It is not your live MegaPay/bank balance and excludes provider fees, chargebacks, and money movements not recorded here.</div>
+    <?php elseif ($view === 'users'): ?>
+    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
+      <div>
+        <h1 class="text-2xl font-bold" style="font-family:'Space Grotesk'">Registered Users</h1>
+        <p class="text-sm text-gray-400 mt-1"><?= $usersLoaded ? htmlspecialchars(number_format($usersTotalCount) . ' users · ' . number_format($bannedCount) . ' banned', ENT_QUOTES) : '—' ?></p>
+      </div>
+      <form method="GET" class="flex items-end gap-2 bg-gray-900/60 border border-gray-800 rounded-xl p-3">
+        <input type="hidden" name="view" value="users">
+        <label class="block text-xs text-gray-400">Search
+          <input type="text" name="search" value="<?= adminH($search) ?>" class="block mt-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 w-60" placeholder="Username, email, phone...">
+        </label>
+        <button class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4 py-2 text-sm font-semibold">Filter</button>
+        <?php if ($search !== ''): ?>
+          <a href="/admin/admin.php?view=users" class="text-xs text-gray-500 hover:text-gray-300">Clear</a>
+        <?php endif; ?>
+      </form>
+    </div>
+
+    <?php if ($flash): ?>
+      <div class="<?= $flash['type']==='success'?'bg-green-500/10 border-green-500/30 text-green-300':'bg-red-500/10 border-red-500/30 text-red-300' ?> border rounded-xl p-4 mb-5 text-sm"><?= adminH($flash['message']) ?></div>
+    <?php endif; ?>
+    <?php if (!$usersLoaded): ?>
+      <div class="bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl p-4 mb-5 text-sm">User data could not be loaded. Check the database connection and ensure the banned-column migration has been applied.</div>
+    <?php endif; ?>
+
+    <section class="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm min-w-[1000px]">
+          <thead><tr class="text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-800"><th class="py-3 pr-4">ID</th><th class="py-3 pr-4">Username</th><th class="py-3 pr-4">Email</th><th class="py-3 pr-4">M-Pesa Phone</th><th class="py-3 pr-4">Balance</th><th class="py-3 pr-4">Trades</th><th class="py-3 pr-4">Deposits</th><th class="py-3 pr-4">Registered</th><th class="py-3 pr-4">Status</th><th class="py-3">Actions</th></tr></thead>
+          <tbody>
+          <?php if (!$usersList): ?>
+            <tr><td colspan="10" class="py-6 text-center text-gray-500">No registered users found.</td></tr>
+          <?php else: foreach ($usersList as $u): ?>
+            <tr class="border-b border-gray-800/70">
+              <td class="py-4 pr-4 text-gray-400 font-mono">#<?= (int)$u['id'] ?></td>
+              <td class="py-4 pr-4 font-medium"><?= adminH($u['username']) ?></td>
+              <td class="py-4 pr-4 text-gray-300 truncate max-w-[180px]"><?= adminH($u['email']) ?></td>
+              <td class="py-4 pr-4 font-mono text-gray-200"><?= adminH($u['phone'] ?: '—') ?></td>
+              <td class="py-4 pr-4 font-mono text-yellow-300"><?= adminMoney((float)$u['balance']) ?></td>
+              <td class="py-4 pr-4 text-gray-300"><?= number_format((int)$u['trade_count']) ?></td>
+              <td class="py-4 pr-4 text-green-300"><?= number_format((int)$u['deposit_count']) ?></td>
+              <td class="py-4 pr-4 text-gray-400 whitespace-nowrap"><?= adminH($u['created_at']) ?></td>
+              <td class="py-4 pr-4"><?= ((int)$u['banned']) === 1 ? '<span class="text-red-400 font-medium">Banned</span>' : '<span class="text-green-400 font-medium">Active</span>' ?></td>
+              <td class="py-3">
+                <?php if (((int)$u['banned']) === 1): ?>
+                  <form method="POST" class="flex items-center gap-2" onsubmit="return confirm('Unban this user? They will be able to log in and trade again.');">
+                    <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
+                    <input type="hidden" name="action" value="unban_user">
+                    <input type="hidden" name="user_id" value="<?= (int)$u['id'] ?>">
+                    <button class="bg-green-600 hover:bg-green-500 rounded-lg px-3 py-1.5 text-xs font-semibold">Unban</button>
+                  </form>
+                <?php else: ?>
+                  <form method="POST" class="flex items-center gap-2" onsubmit="return confirm('Ban this user? They will be blocked from logging in.');">
+                    <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
+                    <input type="hidden" name="action" value="ban_user">
+                    <input type="hidden" name="user_id" value="<?= (int)$u['id'] ?>">
+                    <button class="bg-red-600 hover:bg-red-500 rounded-lg px-3 py-1.5 text-xs font-semibold">Ban</button>
+                  </form>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; endif; ?>
+          </tbody>
+        </table>
+      </div>
+      <?php $totalPages = max(1, (int)ceil($usersTotalCount / $usersLimit)); ?>
+      <?php if ($totalPages > 1): ?>
+        <div class="flex items-center justify-between mt-4 text-xs text-gray-500">
+          <span>Page <?= $page ?> of <?= $totalPages ?></span>
+          <div class="flex items-center gap-1">
+            <?php if ($page > 1): ?>
+              <?php $prev = $_GET; $prev['page'] = $page - 1; ?>
+              <a href="/admin/admin.php?<?= http_build_query($prev) ?>" class="bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2.5 py-1">&laquo;</a>
+            <?php endif; ?>
+            <?php for ($p = 1; $p <= $totalPages; $p++): ?>
+              <?php $cur = $_GET; $cur['page'] = $p; ?>
+              <a href="/admin/admin.php?<?= http_build_query($cur) ?>" class="<?= $p === $page ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400 hover:text-white' ?> px-2.5 py-1 rounded"><?= $p ?></a>
+            <?php endfor; ?>
+            <?php if ($page < $totalPages): ?>
+              <?php $next = $_GET; $next['page'] = $page + 1; ?>
+              <a href="/admin/admin.php?<?= http_build_query($next) ?>" class="bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2.5 py-1">&raquo;</a>
+            <?php endif; ?>
+          </div>
+        </div>
+      <?php endif; ?>
+    </section>
+    <?php endif; ?>
   </main>
 </body>
 </html>

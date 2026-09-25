@@ -5,7 +5,7 @@ if (isset($_SESSION['user_id'])) {
     exit;
 }
 
-$error = '';
+$error = isset($_GET['banned']) ? 'This account is suspended. Contact support.' : '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $login    = trim($_POST['email'] ?? '');
@@ -17,16 +17,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             require_once __DIR__ . '/api/db.php';
 
-            $stmt = $pdo->prepare('SELECT id, username, password FROM users WHERE email = ? OR phone = ? OR username = ? LIMIT 1');
+            $stmt = $pdo->prepare('SELECT id, username, password, banned FROM users WHERE email = ? OR phone = ? OR username = ? LIMIT 1');
             $stmt->execute([$login, $login, $login]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($user && password_verify($password, $user['password'])) {
-                $_SESSION['user_id']  = $user['id'];
-                $_SESSION['username'] = $user['username'];
-                session_regenerate_id(true);
-                header('Location: /trade.php');
-                exit;
+                if ((int)$user['banned'] === 1) {
+                    $error = 'This account is suspended. Contact support.';
+                } else {
+                    $_SESSION['user_id']  = $user['id'];
+                    $_SESSION['username'] = $user['username'];
+                    session_regenerate_id(true);
+                    header('Location: /trade.php');
+                    exit;
+                }
             } else {
                 $error = 'Invalid credentials.';
             }
