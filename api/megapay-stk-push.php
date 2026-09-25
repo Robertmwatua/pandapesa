@@ -11,7 +11,7 @@ if (!isset($_SESSION['user_id'])) {
 require_once __DIR__ . '/db.php';
 $cfg = require __DIR__ . '/megapay-config.php';
 
-const MIN_DEPOSIT = 50;
+const MIN_DEPOSIT = 150;
 
 $userId = $_SESSION['user_id'];
 $input  = json_decode(file_get_contents('php://input'), true) ?: [];

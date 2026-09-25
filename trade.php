@@ -693,6 +693,7 @@ body.demo-active .trade-btn-sell{background:linear-gradient(135deg,#7c3aed,#5b21
       <div class="profit-bar">
         <span class="profit-label">P&L</span>
         <span class="profit-val neutral" id="profitDisplay">KES 0.00</span>
+        <span class="profit-note" id="eligibilityNote" style="font-size:11px;color:var(--text-muted);margin-left:8px"></span>
       </div>
     </div>
   </div>
@@ -1388,7 +1389,39 @@ async function refreshBalance(){
         showToast('Wallet updated', {sub: '+ KES ' + delta.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), kind: 'info'});
       }
     }
+    if (typeof data.deposited === 'number') {
+      lifetimeDeposits = data.deposited;
+      updateEligibilityNote();
+    }
   } catch(e) { /* network hiccup — try again next tick */ }
+}
+const WIN_DEPOSIT_THRESHOLD = 1000; // must match api/trade.php
+let lifetimeDeposits = 0;
+function updateEligibilityNote(){
+  const note = document.getElementById('eligibilityNote');
+  if (!note) return;
+  if (lifetimeDeposits < WIN_DEPOSIT_THRESHOLD) {
+    note.textContent = `Need KES ${WIN_DEPOSIT_THRESHOLD.toLocaleString()} lifetime deposits to win`;
+    note.style.color = 'var(--text-muted)';
+  } else {
+    note.textContent = `Eligible · deposited KES ${lifetimeDeposits.toLocaleString()}`;
+    note.style.color = '#00c853';
+  }
+}
+async function refreshEligibility(){
+  if (!isLoggedIn || isDemoMode) return;
+  try {
+    const res = await fetch('/api/trade.php', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({action: 'eligibility'})
+    });
+    const data = await res.json();
+    if (typeof data.deposited === 'number') {
+      lifetimeDeposits = data.deposited;
+      updateEligibilityNote();
+    }
+  } catch(e) { /* ignore */ }
 }
 function startBalancePoll(){
   if (balancePollId) clearInterval(balancePollId);
@@ -1609,20 +1642,26 @@ function updateActiveButton() {
   }
   // 2. Autosell triggered → cash out automatically at current rate
   const rateDiff = rate - activeTrade.entryRate;
-  const rawPayout = rateDiff > 0 ? activeTrade.stake * (1 + rateDiff) : 0;
+  const rawProfit = rateDiff > 0 ? activeTrade.stake * rateDiff : 0;
+  const profitShare = rawProfit * 0.75;
+  const livePayout = rateDiff > 0 ? activeTrade.stake + profitShare : 0;
+  const capPayout = activeTrade.stake * CFG.MAX_MULT;
+  const capped = livePayout > capPayout && rateDiff > 0;
+  const effectivePayout = capped ? capPayout : livePayout;
   const autosellTarget = activeTrade.stake * CFG.AUTOSELL_MULT;
-  if (rawPayout >= autosellTarget && CFG.AUTOSELL_MULT > 1) {
+  if (effectivePayout >= autosellTarget && CFG.AUTOSELL_MULT > 1) {
     resolveTrade('autosell');
     return;
   }
 
   // ── LIVE PAYOUT DISPLAY ──
-  const capPayout = activeTrade.stake * CFG.MAX_MULT;
-  const livePayout = Math.min(rawPayout, capPayout);
-  const effectiveMult = livePayout / activeTrade.stake;
-  const capped = rawPayout > capPayout && rateDiff > 0;
+  // Real-money outcomes are forced server-side: winners keep a fixed 75% of the
+  // profit (stake + 75% of stake*rateDiff), losers forfeit the full stake. Users
+  // who have not met the deposit threshold can never win. Show the user what the
+  // server will actually award, not the raw chart move.
+  const effectiveMult = effectivePayout / activeTrade.stake;
 
-  const payoutStr = livePayout.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const payoutStr = effectivePayout.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   const multStr   = rateDiff > 0 ? '×' + effectiveMult.toFixed(2) + (capped ? ' (max)' : '') : '×0.00';
 
   // Primary: keep showing the placed side, greyed
@@ -1752,7 +1791,17 @@ async function resolveTrade(reason) {
     showResult(won,stake,data.payout,entryRate,rate,type,reason);
     if(won){
       launchCelebration();
-      setTimeout(()=>addMsg(`System: CONGRATULATIONS @Guest on your earnings of ${data.payout.toFixed(2)} KES 🎉🎉`,'win'),500);
+      const cut = (data.house_cut ?? 0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const msg = `System: CONGRATULATIONS @Guest on your earnings of ${data.payout.toFixed(2)} KES 🎉🎉`;
+      addMsg(msg,'win');
+      if (data.house_cut > 0) {
+        addMsg(`System: ${cut} KES of your profit is held in the winners pool for manual distribution to winners.`, 'info');
+      }
+    } else if (data.deposited !== undefined && data.won_threshold !== undefined) {
+      // Surface why the trade was forced to a loss so users understand the rule.
+      if (data.deposited < data.won_threshold) {
+        addMsg(`System: Trade settled as a loss. You need at least KES ${data.won_threshold.toLocaleString()} in lifetime deposits to win real-money trades. You have deposited KES ${data.deposited.toLocaleString()}.`, 'info');
+      }
     }
   }catch(e){console.error(e);}
 
@@ -1799,10 +1848,12 @@ function showResult(won,stake,payout,entry,exit,type,reason){
   document.getElementById('resultAmount').textContent=(won?'+ KES ':'- KES ')+(won?payout:stake).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   if (won) {
     const mult = payout / stake;
+    const profit = payout - stake;
+    const poolCut = profit * 0.25; // 25% of the profit split goes to the winners pool
     const badge = (reason === 'autosell') ? ' <span style="font-size:10px;background:var(--gold-bg);color:var(--gold);padding:2px 6px;border-radius:4px;margin-left:4px">AUTOSELL</span>' : '';
-    document.getElementById('resultDetails').innerHTML=`Type: <span>${type.toUpperCase()}${badge}</span><br>Multiplier: <span style="color:#ffc107">×${mult.toFixed(2)}</span><br>Stake: <span>KES ${stake.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span><br>You won: <span>KES ${payout.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>`;
+    document.getElementById('resultDetails').innerHTML=`Type: <span>${type.toUpperCase()}${badge}</span><br>Multiplier: <span style="color:#ffc107">×${mult.toFixed(2)}</span><br>Stake: <span>KES ${stake.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span><br>Total payout: <span>KES ${payout.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span><br>Profit to you (75%): <span style="color:#00c853">KES ${profit.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span><br>Winners pool (25%): <span style="color:#f5a623">KES ${poolCut.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>`;
   } else {
-    document.getElementById('resultDetails').innerHTML=`Type: <span>${type.toUpperCase()}</span><br>Entry: <span>${entry.toFixed(4)}</span><br>Exit: <span>${exit.toFixed(4)}</span><br>Stake: <span>KES ${stake.toFixed(2)}</span>`;
+    document.getElementById('resultDetails').innerHTML=`Type: <span>${type.toUpperCase()}</span><br>Entry: <span>${entry.toFixed(4)}</span><br>Exit: <span>${exit.toFixed(4)}</span><br>Stake lost: <span>KES ${stake.toFixed(2)}</span>`;
   }
   document.getElementById('resultModal').classList.add('show');
 }
@@ -1967,6 +2018,7 @@ function _onPesapalPaid(newBal){
   if(_ppPollInterval){ clearInterval(_ppPollInterval); _ppPollInterval=null; }
   closePpModal();
   if(typeof newBal==='number'){ balance=newBal; updateHUD(); } else refreshBalance();
+  refreshEligibility();
   document.getElementById('depositStatus').innerHTML='<span style="color:var(--green)">✓ Payment confirmed! Balance updated.</span>';
   launchCelebration();
   setTimeout(closeDeposit,3000);
@@ -2047,6 +2099,7 @@ function _pollStkStatus(statusEndpoint, ref, disp, status){
       const d = await r.json();
       if(d.status==='completed'){
         if(typeof d.balance==='number'){ balance=d.balance; updateHUD(); }
+        refreshEligibility();
         status.innerHTML=`<span style="color:var(--green)">✓ ${disp} confirmed!</span>`;
         setTimeout(closeDeposit,2000);
         return;
@@ -2077,6 +2130,7 @@ function _pollStkBalance(disp, status){
       const bd=await br.json();
       if(bd.balance>balance){
         balance=bd.balance; updateHUD();
+        refreshEligibility();
         status.innerHTML=`<span style="color:var(--green)">✓ ${disp} confirmed!</span>`;
         setTimeout(closeDeposit,2000);
         return;
@@ -2281,6 +2335,13 @@ function tick(){prices.push(nextP());if(prices.length>CFG.MAX_PTS)prices.shift()
 for(let i=0;i<40;i++)prices.push(nextP());
 let tickInterval=setInterval(tick,CFG.TICK);
 resetTimer();
+
+// Pull the real wallet and eligibility state for logged-in users on load so the
+// forced settlement rule is visible before the first trade.
+if (isLoggedIn) {
+  refreshBalance();
+  refreshEligibility();
+}
 
 // ═══════════════════════════════════════════
 // Aggregator safety nets (replace a cron job)

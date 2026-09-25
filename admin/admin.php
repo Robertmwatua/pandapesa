@@ -85,8 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['action'] ?? '') === 'mark_withdrawal_paid') {
         $withdrawalId = (int)($_POST['withdrawal_id'] ?? 0);
         $paymentReference = trim((string)($_POST['payment_reference'] ?? ''));
-        if ($withdrawalId < 1 || $paymentReference === '' || strlen($paymentReference) > 100) {
-            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Enter the M-Pesa receipt/reference before marking this withdrawal paid.'];
+        if ($withdrawalId < 1 || strlen($paymentReference) > 100) {
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Invalid withdrawal ID or receipt/reference is too long.'];
             header('Location: /admin/admin.php');
             exit;
         }
@@ -106,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new RuntimeException('Withdrawal status changed before it could be updated.');
                 }
                 $pdo->commit();
-                $_SESSION['admin_flash'] = ['type' => 'success', 'message' => 'Withdrawal marked paid and receipt recorded.'];
+                $_SESSION['admin_flash'] = ['type' => 'success', 'message' => $paymentReference === '' ? 'Withdrawal marked paid without a receipt reference.' : 'Withdrawal marked paid and receipt recorded.'];
             }
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -314,7 +314,7 @@ try {
     </div>
 
     <section class="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 mb-6">
-      <div class="flex items-center justify-between gap-3 mb-4"><div><h2 class="text-lg font-semibold">Pending withdrawals</h2><p class="text-xs text-gray-500 mt-1">All dates · make the M-Pesa payment first, then record its receipt below.</p></div><span class="text-amber-300 text-sm font-semibold"><?= count($pendingQueue) ?> pending shown</span></div>
+      <div class="flex items-center justify-between gap-3 mb-4"><div><h2 class="text-lg font-semibold">Pending withdrawals</h2><p class="text-xs text-gray-500 mt-1">All dates · make the M-Pesa payment first. Receipt/reference is optional.</p></div><span class="text-amber-300 text-sm font-semibold"><?= count($pendingQueue) ?> pending shown</span></div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm min-w-[900px]">
           <thead><tr class="text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-800"><th class="py-3 pr-4">Requested</th><th class="py-3 pr-4">User</th><th class="py-3 pr-4">Amount</th><th class="py-3 pr-4">M-Pesa number</th><th class="py-3">Confirm payment</th></tr></thead>
@@ -326,7 +326,7 @@ try {
                 <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
                 <input type="hidden" name="action" value="mark_withdrawal_paid">
                 <input type="hidden" name="withdrawal_id" value="<?= (int)$w['id'] ?>">
-                <input type="text" name="payment_reference" required maxlength="100" placeholder="M-Pesa receipt" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white w-40">
+                <input type="text" name="payment_reference" maxlength="100" placeholder="Receipt (optional)" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white w-40">
                 <button class="bg-green-600 hover:bg-green-500 rounded-lg px-3 py-2 text-xs font-semibold whitespace-nowrap">Mark paid</button>
               </form>
             </td></tr>
