@@ -249,7 +249,7 @@ try {
       </div>
       <form method="GET" class="flex flex-wrap items-end gap-2 bg-gray-900/60 border border-gray-800 rounded-xl p-3">
         <label class="text-xs text-gray-400">Period
-          <select name="period" onchange="this.form.submit()" class="block mt-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
+          <select name="period" class="block mt-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
             <option value="today" <?= $period==='today'?'selected':'' ?>>Today</option>
             <option value="7d" <?= $period==='7d'?'selected':'' ?>>Last 7 days</option>
             <option value="30d" <?= $period==='30d'?'selected':'' ?>>Last 30 days</option>

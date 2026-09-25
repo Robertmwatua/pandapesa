@@ -2256,7 +2256,6 @@ function toggleTheme(){
 
 // ═══════════════════════════════════════════
 // Site-wide admin announcement. Poll so users already on the page see new broadcasts.
-let displayedAnnouncementId = null;
 async function refreshSiteAnnouncement(){
   try{
     const response = await fetch('/api/announcement.php', {cache:'no-store'});
@@ -2266,13 +2265,11 @@ async function refreshSiteAnnouncement(){
     const banner = document.getElementById('siteAnnouncement');
     if(!announcement){
       banner.classList.remove('visible');
-      displayedAnnouncementId = null;
       return;
     }
     document.getElementById('siteAnnouncementTitle').textContent = announcement.title || 'Announcement';
     document.getElementById('siteAnnouncementMessage').textContent = announcement.message || '';
     banner.classList.add('visible');
-    displayedAnnouncementId = announcement.id;
   }catch(e){ /* announcement polling is best-effort */ }
 }
 refreshSiteAnnouncement();
