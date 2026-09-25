@@ -155,6 +155,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if (($_POST['action'] ?? '') === 'set_test_account') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        $isTest = ($_POST['is_test'] ?? '') === '1' ? 1 : 0;
+        if ($userId < 1) {
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Invalid user ID.'];
+            header('Location: /admin/admin.php?view=users');
+            exit;
+        }
+        try {
+            // Unmarking wipes the admin-set balance so it can never be withdrawn as real money.
+            $stmt = $isTest
+                ? $pdo->prepare('UPDATE users SET is_test = 1 WHERE id = ?')
+                : $pdo->prepare('UPDATE users SET is_test = 0, balance = 0 WHERE id = ? AND is_test = 1');
+            $stmt->execute([$userId]);
+            error_log(sprintf('Admin #%d set is_test=%d on user #%d', (int)$_SESSION['admin_id'], $isTest, $userId));
+            $_SESSION['admin_flash'] = ['type' => 'success', 'message' => $isTest ? 'Marked as a test account. You can now set its balance; withdrawals are blocked.' : 'Test account flag removed and its balance reset to KES 0.00.'];
+        } catch (Throwable $e) {
+            error_log('Admin set test account failed: ' . $e->getMessage());
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Could not update the account. Ensure the test-account migration has been applied.'];
+        }
+        header('Location: /admin/admin.php?view=users');
+        exit;
+    }
+
+    if (($_POST['action'] ?? '') === 'set_test_balance') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        $rawBalance = trim((string)($_POST['balance'] ?? ''));
+        if ($userId < 1 || !is_numeric($rawBalance) || (float)$rawBalance < 0 || (float)$rawBalance > 10000000) {
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Enter a balance between 0 and 10,000,000.'];
+            header('Location: /admin/admin.php?view=users');
+            exit;
+        }
+        $newBalance = round((float)$rawBalance, 2);
+        try {
+            // Only test accounts can be edited, so real user wallets can't be changed here.
+            $stmt = $pdo->prepare('UPDATE users SET balance = ? WHERE id = ? AND is_test = 1');
+            $stmt->execute([$newBalance, $userId]);
+            $check = $pdo->prepare('SELECT is_test FROM users WHERE id = ?');
+            $check->execute([$userId]);
+            if ((int)$check->fetchColumn() !== 1) {
+                $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Only test accounts can have their balance set. Mark the account as a test account first.'];
+            } else {
+                error_log(sprintf('Admin #%d set test user #%d balance to %.2f', (int)$_SESSION['admin_id'], $userId, $newBalance));
+                $_SESSION['admin_flash'] = ['type' => 'success', 'message' => 'Test balance set to ' . adminMoney($newBalance) . '.'];
+            }
+        } catch (Throwable $e) {
+            error_log('Admin set test balance failed: ' . $e->getMessage());
+            $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Could not set balance. Ensure the test-account migration has been applied.'];
+        }
+        header('Location: /admin/admin.php?view=users');
+        exit;
+    }
+
     $_SESSION['admin_flash'] = ['type' => 'error', 'message' => 'Unknown admin action.'];
     header('Location: /admin/admin.php');
     exit;
@@ -288,7 +341,7 @@ if ($view === 'users') {
         $page = min($page, $usersPageCount);
         $usersOffset = ($page - 1) * $usersLimit;
 
-        $stmt = $pdo->prepare("SELECT u.id, u.username, u.email, u.phone, u.balance, u.created_at, u.banned, COALESCE(t.trade_count,0) AS trade_count, COALESCE(d.deposit_count,0) AS deposit_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS trade_count FROM trades WHERE result IN ('win','loss') GROUP BY user_id) t ON t.user_id = u.id LEFT JOIN (SELECT user_id, COUNT(*) AS deposit_count FROM deposits WHERE status = 'completed' GROUP BY user_id) d ON d.user_id = u.id $whereClause ORDER BY u.created_at DESC LIMIT $usersLimit OFFSET $usersOffset");
+        $stmt = $pdo->prepare("SELECT u.id, u.username, u.email, u.phone, u.balance, u.created_at, u.banned, u.is_test, COALESCE(t.trade_count,0) AS trade_count, COALESCE(d.deposit_count,0) AS deposit_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS trade_count FROM trades WHERE result IN ('win','loss') GROUP BY user_id) t ON t.user_id = u.id LEFT JOIN (SELECT user_id, COUNT(*) AS deposit_count FROM deposits WHERE status = 'completed' GROUP BY user_id) d ON d.user_id = u.id $whereClause ORDER BY u.created_at DESC LIMIT $usersLimit OFFSET $usersOffset");
         $stmt->execute($searchParams);
         $usersList = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $usersLoaded = true;
@@ -479,8 +532,25 @@ if ($view === 'users') {
               <td class="py-4 pr-4 text-gray-300"><?= number_format((int)$u['trade_count']) ?></td>
               <td class="py-4 pr-4 text-green-300"><?= number_format((int)$u['deposit_count']) ?></td>
               <td class="py-4 pr-4 text-gray-400 whitespace-nowrap"><?= adminH($u['created_at']) ?></td>
-              <td class="py-4 pr-4"><?= ((int)$u['banned']) === 1 ? '<span class="text-red-400 font-medium">Banned</span>' : '<span class="text-green-400 font-medium">Active</span>' ?></td>
+              <td class="py-4 pr-4"><?= ((int)$u['banned']) === 1 ? '<span class="text-red-400 font-medium">Banned</span>' : '<span class="text-green-400 font-medium">Active</span>' ?><?= ((int)$u['is_test']) === 1 ? ' <span class="ml-1 bg-purple-500/20 text-purple-300 rounded px-1.5 py-0.5 text-[10px] font-bold">TEST</span>' : '' ?></td>
               <td class="py-3">
+                <div class="flex flex-col gap-2">
+                <form method="POST" onsubmit="return confirm(<?= ((int)$u['is_test']) === 1 ? "'Remove the test flag? Its balance will be reset to KES 0.'" : "'Mark as a test account? You will be able to set its balance, and it will be blocked from withdrawals.'" ?>);">
+                  <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
+                  <input type="hidden" name="action" value="set_test_account">
+                  <input type="hidden" name="user_id" value="<?= (int)$u['id'] ?>">
+                  <input type="hidden" name="is_test" value="<?= ((int)$u['is_test']) === 1 ? '0' : '1' ?>">
+                  <button class="bg-purple-700 hover:bg-purple-600 rounded-lg px-3 py-1.5 text-xs font-semibold"><?= ((int)$u['is_test']) === 1 ? 'Unmark test' : 'Make test account' ?></button>
+                </form>
+                <?php if (((int)$u['is_test']) === 1): ?>
+                  <form method="POST" class="flex items-center gap-1">
+                    <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
+                    <input type="hidden" name="action" value="set_test_balance">
+                    <input type="hidden" name="user_id" value="<?= (int)$u['id'] ?>">
+                    <input type="number" name="balance" min="0" max="10000000" step="0.01" value="<?= adminH(number_format((float)$u['balance'], 2, '.', '')) ?>" class="w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white font-mono">
+                    <button class="bg-yellow-600 hover:bg-yellow-500 rounded-lg px-3 py-1.5 text-xs font-semibold">Set balance</button>
+                  </form>
+                <?php endif; ?>
                 <?php if (((int)$u['banned']) === 1): ?>
                   <form method="POST" class="flex items-center gap-2" onsubmit="return confirm('Unban this user? They will be able to log in and trade again.');">
                     <input type="hidden" name="csrf_token" value="<?= adminH($_SESSION['admin_csrf']) ?>">
@@ -496,6 +566,7 @@ if ($view === 'users') {
                     <button class="bg-red-600 hover:bg-red-500 rounded-lg px-3 py-1.5 text-xs font-semibold">Ban</button>
                   </form>
                 <?php endif; ?>
+                </div>
               </td>
             </tr>
           <?php endforeach; endif; ?>

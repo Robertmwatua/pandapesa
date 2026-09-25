@@ -39,9 +39,17 @@ switch ($action) {
         $pdo->beginTransaction();
         try {
             // Lock the user's row to avoid races (same pattern as api/trade.php)
-            $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ? FOR UPDATE');
+            $stmt = $pdo->prepare('SELECT balance, is_test FROM users WHERE id = ? FOR UPDATE');
             $stmt->execute([$userId]);
-            $balance = $stmt->fetchColumn();
+            $account = $stmt->fetch(PDO::FETCH_ASSOC);
+            $balance = $account ? $account['balance'] : false;
+
+            // Test accounts hold admin-set balances, never real money.
+            if ($account && (int)$account['is_test'] === 1) {
+                $pdo->rollBack();
+                echo json_encode(['error' => 'Withdrawals are disabled for test accounts.']);
+                break;
+            }
 
             if ($balance === false || (float)$balance < $amount) {
                 $pdo->rollBack();
