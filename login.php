@@ -25,9 +25,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ((int)$user['banned'] === 1) {
                     $error = 'This account is suspended. Contact support.';
                 } else {
+                    // New session ID before storing the login. Deleting the old
+                    // session file fails on Azure's shared /home storage, which made
+                    // regenerate_id(true) drop the whole session. The old ID holds no
+                    // login data, so keeping its file is harmless.
+                    session_regenerate_id(false);
+                    if (session_status() !== PHP_SESSION_ACTIVE) {
+                        session_start();
+                    }
                     $_SESSION['user_id']  = $user['id'];
                     $_SESSION['username'] = $user['username'];
-                    session_regenerate_id(true);
                     // Save the session before redirecting; otherwise the browser can
                     // request /trade.php before the login is written to shared storage.
                     session_write_close();
