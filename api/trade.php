@@ -170,13 +170,32 @@ switch ($action) {
 
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare("SELECT stake, entry_rate FROM trades WHERE id = ? AND user_id = ? AND result = 'pending' FOR UPDATE");
+            $stmt = $pdo->prepare('SELECT stake, entry_rate, exit_rate, payout, house_cut, result FROM trades WHERE id = ? AND user_id = ? FOR UPDATE');
             $stmt->execute([$tradeId, $userId]);
             $trade = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$trade) {
                 $pdo->rollBack();
-                echo json_encode(['error' => 'Trade not found or already resolved.']);
+                echo json_encode(['error' => 'Trade not found.']);
+                break;
+            }
+
+            // A previous response may have been lost after the transaction
+            // committed. Return its stored outcome without crediting twice.
+            if ($trade['result'] !== 'pending') {
+                $deposited = lifetimeDeposits($pdo, $userId);
+                $newBalance = currentBalance($pdo, $userId);
+                $pdo->commit();
+                echo json_encode([
+                    'balance' => $newBalance,
+                    'result' => $trade['result'],
+                    'payout' => (float)$trade['payout'],
+                    'house_cut' => (float)$trade['house_cut'],
+                    'won_threshold' => WIN_DEPOSIT_THRESHOLD,
+                    'deposited' => $deposited,
+                    'exit_rate' => (float)$trade['exit_rate'],
+                    'already_resolved' => true,
+                ]);
                 break;
             }
 

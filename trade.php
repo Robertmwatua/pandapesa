@@ -1739,9 +1739,25 @@ function launchCelebration() {
   setTimeout(() => container.remove(), 6500);
 }
 
+function restoreTradeAfterResolveFailure(message){
+  if(!activeTrade)return;
+  tradePhase = 'active';
+  const primaryBtn = document.getElementById(activeTrade.type==='buy'?'buyBtn':'sellBtn');
+  const secondaryBtn = document.getElementById(activeTrade.type==='buy'?'sellBtn':'buyBtn');
+  primaryBtn.classList.add('active-trade','disabled');
+  primaryBtn.classList.remove('processing','cashout','cancel-mode');
+  primaryBtn.onclick = null;
+  secondaryBtn.classList.add('active-trade','cashout');
+  secondaryBtn.classList.remove('processing','disabled','cancel-mode');
+  secondaryBtn.onclick = () => resolveTrade(activeTrade.pendingResolveReason || 'manual');
+  updateActiveButton();
+  showToast('Trade settlement not confirmed', {sub:message || 'Tap CASHOUT to safely retry settlement.',kind:'warn',ms:6000});
+}
+
 async function resolveTrade(reason) {
   // reason: 'manual' | 'autosell' | 'crash' | 'expired'
   if(!activeTrade || tradePhase !== 'active')return;
+  const settlementReason = activeTrade.pendingResolveReason || reason;
   tradePhase = 'resolving';
   clearInterval(prestartInterval);
 
@@ -1760,7 +1776,7 @@ async function resolveTrade(reason) {
 
   // ── DEMO MODE: resolve client-side, ~80% win rate ──
   if(activeTrade.isDemo){
-    const expired = reason === 'expired' || reason === 'crash';
+    const expired = settlementReason === 'expired' || settlementReason === 'crash';
     let won, payout;
     if(expired){
       won = false; payout = 0;
@@ -1780,7 +1796,7 @@ async function resolveTrade(reason) {
     }
     if(won){ demoBalance += payout; } // stake was already deducted at place
     localStorage.setItem('demoBalance', demoBalance);
-    showResult(won,stake,payout,entryRate,rate,type,reason);
+    showResult(won,stake,payout,entryRate,rate,type,settlementReason);
     if(won){
       launchCelebration();
       setTimeout(()=>addMsg(`System: CONGRATULATIONS @DemoTrader on your demo earnings of ${payout.toFixed(2)} KES 🎉🎉`,'win'),500);
@@ -1794,14 +1810,19 @@ async function resolveTrade(reason) {
 
   // ── REAL MODE ──
   try{
-    const expired = reason === 'expired' || reason === 'crash';
+    const expired = settlementReason === 'expired' || settlementReason === 'crash';
     const res=await fetch('/api/trade.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'resolve',trade_id:tradeId,exit_rate:rate,expired})});
     const data=await res.json();
-    if(data.error){console.error(data.error);resetBtns();return;}
+    if(data.error){
+      console.error(data.error);
+      activeTrade.pendingResolveReason = settlementReason;
+      restoreTradeAfterResolveFailure(data.error);
+      return;
+    }
 
     balance=data.balance;
     const won=data.result==='win';
-    showResult(won,stake,data.payout,entryRate,rate,type,reason);
+    showResult(won,stake,data.payout,entryRate,rate,type,settlementReason);
     if(won){
       launchCelebration();
       const cut = (data.house_cut ?? 0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1816,7 +1837,12 @@ async function resolveTrade(reason) {
         addMsg(`System: Trade settled as a loss. You need at least KES ${data.won_threshold.toLocaleString()} in lifetime deposits to win real-money trades. You have deposited KES ${data.deposited.toLocaleString()}.`, 'info');
       }
     }
-  }catch(e){console.error(e);}
+  }catch(e){
+    console.error(e);
+    activeTrade.pendingResolveReason = settlementReason;
+    restoreTradeAfterResolveFailure('Network error. Tap CASHOUT to retry; the server will prevent duplicate settlement.');
+    return;
+  }
 
   activeTrade=null;
   tradePhase = 'idle';
