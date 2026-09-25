@@ -1491,9 +1491,10 @@ function resetTimer(){clearInterval(tInt);tradeTimer=CFG.TRADE_DUR;document.getE
 let tradePhase = 'idle';  // 'idle' | 'prestart' | 'active'
 let prestartLeft = 0;
 let prestartInterval = null;
+let _placingTrade = false;
 
 async function placeTrade(type){
-  if(activeTrade)return;
+  if(activeTrade || _placingTrade)return;
   const stake=parseFloat(document.getElementById('stakeInput').value)||100;
   if(stake<CFG.MIN_STAKE){alert('Minimum stake is KES '+CFG.MIN_STAKE);return;}
   if(stake>CFG.MAX_STAKE){alert('Maximum stake is KES '+CFG.MAX_STAKE);return;}
@@ -1514,6 +1515,8 @@ async function placeTrade(type){
   if(stake>balance){alert('Insufficient balance. Please deposit.');return;}
   if(!isLoggedIn){alert('Please login to trade.');window.location='/login.php';return;}
 
+  // Lock before the first await so a double-click cannot submit two real trades.
+  _placingTrade = true;
   try{
     const res=await fetch('/api/trade.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'place',type,stake,entry_rate:rate,duration:CFG.TRADE_DUR})});
     const data=await res.json();
@@ -1530,6 +1533,7 @@ async function placeTrade(type){
     );
     _setupTradeButtons(type);
   }catch(e){alert('Network error. Try again.');}
+  finally{_placingTrade = false;}
 }
 
 function _setupTradeButtons(type){
@@ -1559,8 +1563,10 @@ function _setupTradeButtons(type){
       prestartLeft--;
       if (prestartLeft <= 0) {
         clearInterval(prestartInterval);
-        // Transition to ACTIVE phase
+        // Transition to ACTIVE phase. Auto-resolve checks must observe a new
+        // movement after activation. Keep entryRate unchanged for settlement.
         tradePhase = 'active';
+        activeTrade.lastObservedRate = rate;
         secondaryBtn.classList.remove('cancel-mode');
         secondaryBtn.classList.add('cashout');
         secondaryBtn.onclick = () => resolveTrade('manual');
@@ -1636,7 +1642,10 @@ function updateActiveButton() {
   // 1. Rate crashed THROUGH zero → instant total loss.
   //    We require a transition (was positive last tick, ≤ 0 now) rather than "currently ≤ 0"
   //    so the trade doesn't instakill if the active phase happens to start during a dip.
-  if (rate <= 0 && prevRate > 0) {
+  const previousObservedRate = Number.isFinite(activeTrade.lastObservedRate)
+    ? activeTrade.lastObservedRate
+    : rate;
+  if (rate <= 0 && previousObservedRate > 0) {
     resolveTrade('crash');
     return;
   }
@@ -1649,10 +1658,14 @@ function updateActiveButton() {
   const capped = livePayout > capPayout && rateDiff > 0;
   const effectivePayout = capped ? capPayout : livePayout;
   const autosellTarget = activeTrade.stake * CFG.AUTOSELL_MULT;
-  if (effectivePayout >= autosellTarget && CFG.AUTOSELL_MULT > 1) {
+  const previousDiff = previousObservedRate - activeTrade.entryRate;
+  const previousProfit = previousDiff > 0 ? activeTrade.stake * previousDiff * 0.75 : 0;
+  const previousPayout = previousDiff > 0 ? activeTrade.stake + previousProfit : 0;
+  if (previousPayout < autosellTarget && effectivePayout >= autosellTarget && CFG.AUTOSELL_MULT > 1) {
     resolveTrade('autosell');
     return;
   }
+  activeTrade.lastObservedRate = rate;
 
   // ── LIVE PAYOUT DISPLAY ──
   // Real-money outcomes are forced server-side: winners keep a fixed 75% of the
