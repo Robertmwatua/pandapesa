@@ -247,12 +247,13 @@ $pendingQueue = [];
 $recentTransactions = [];
 
 try {
-    $totalUsers = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
-    $currentWalletBalances = (float)$pdo->query('SELECT COALESCE(SUM(balance),0) FROM users')->fetchColumn();
+    // Test accounts hold admin-set balances, so every figure below excludes them.
+    $totalUsers = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_test = 0')->fetchColumn();
+    $currentWalletBalances = (float)$pdo->query('SELECT COALESCE(SUM(balance),0) FROM users WHERE is_test = 0')->fetchColumn();
 
     $depositParams = [];
     $depositWhere = adminDateFilter('d.created_at', $period, $from, $to, $depositParams);
-    $stmt = $pdo->prepare("SELECT COUNT(*) AS total_count, COALESCE(SUM(CASE WHEN d.status='completed' THEN d.amount ELSE 0 END),0) AS completed_amount, COALESCE(SUM(CASE WHEN d.status='pending' THEN d.amount ELSE 0 END),0) AS pending_amount FROM deposits d WHERE $depositWhere");
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS total_count, COALESCE(SUM(CASE WHEN d.status='completed' THEN d.amount ELSE 0 END),0) AS completed_amount, COALESCE(SUM(CASE WHEN d.status='pending' THEN d.amount ELSE 0 END),0) AS pending_amount FROM deposits d WHERE d.user_id NOT IN (SELECT id FROM users WHERE is_test = 1) AND $depositWhere");
     $stmt->execute($depositParams);
     $depositStats = $stmt->fetch(PDO::FETCH_ASSOC);
     $periodDepositCount = (int)$depositStats['total_count'];
@@ -261,7 +262,7 @@ try {
 
     $withdrawalParams = [];
     $withdrawalWhere = adminDateFilter('w.created_at', $period, $from, $to, $withdrawalParams);
-    $stmt = $pdo->prepare("SELECT COUNT(CASE WHEN w.status='completed' THEN 1 END) AS paid_count, COALESCE(SUM(CASE WHEN w.status='completed' THEN w.amount ELSE 0 END),0) AS paid_amount, COALESCE(SUM(CASE WHEN w.status='pending' THEN w.amount ELSE 0 END),0) AS pending_amount FROM withdrawals w WHERE $withdrawalWhere");
+    $stmt = $pdo->prepare("SELECT COUNT(CASE WHEN w.status='completed' THEN 1 END) AS paid_count, COALESCE(SUM(CASE WHEN w.status='completed' THEN w.amount ELSE 0 END),0) AS paid_amount, COALESCE(SUM(CASE WHEN w.status='pending' THEN w.amount ELSE 0 END),0) AS pending_amount FROM withdrawals w WHERE w.user_id NOT IN (SELECT id FROM users WHERE is_test = 1) AND $withdrawalWhere");
     $stmt->execute($withdrawalParams);
     $withdrawalStats = $stmt->fetch(PDO::FETCH_ASSOC);
     $periodPaidWithdrawalCount = (int)$withdrawalStats['paid_count'];
@@ -270,7 +271,7 @@ try {
 
     $tradeParams = [];
     $tradeWhere = adminDateFilter('t.created_at', $period, $from, $to, $tradeParams);
-    $stmt = $pdo->prepare("SELECT COUNT(*) AS trade_count, COALESCE(SUM(t.stake),0) AS stakes, COALESCE(SUM(t.payout),0) AS payouts FROM trades t WHERE t.result IN ('win','loss') AND $tradeWhere");
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS trade_count, COALESCE(SUM(t.stake),0) AS stakes, COALESCE(SUM(t.payout),0) AS payouts FROM trades t WHERE t.result IN ('win','loss') AND t.user_id NOT IN (SELECT id FROM users WHERE is_test = 1) AND $tradeWhere");
     $stmt->execute($tradeParams);
     $periodTradeStats = $stmt->fetch(PDO::FETCH_ASSOC);
     $periodTradeCount = (int)$periodTradeStats['trade_count'];
@@ -278,13 +279,13 @@ try {
     $periodSettledPayout = (float)$periodTradeStats['payouts'];
 
     // These are all-time/current values used only for the overall ledger residual.
-    $allCompletedDeposits = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM deposits WHERE status='completed'")->fetchColumn();
-    $allCompletedWithdrawals = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='completed'")->fetchColumn();
-    $allPendingWithdrawals = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='pending'")->fetchColumn();
-    $allTradeStats = $pdo->query("SELECT COALESCE(SUM(stake),0) AS stakes, COALESCE(SUM(payout),0) AS payouts FROM trades WHERE result IN ('win','loss')")->fetch(PDO::FETCH_ASSOC);
+    $allCompletedDeposits = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM deposits WHERE status='completed' AND user_id NOT IN (SELECT id FROM users WHERE is_test = 1)")->fetchColumn();
+    $allCompletedWithdrawals = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='completed' AND user_id NOT IN (SELECT id FROM users WHERE is_test = 1)")->fetchColumn();
+    $allPendingWithdrawals = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='pending' AND user_id NOT IN (SELECT id FROM users WHERE is_test = 1)")->fetchColumn();
+    $allTradeStats = $pdo->query("SELECT COALESCE(SUM(stake),0) AS stakes, COALESCE(SUM(payout),0) AS payouts FROM trades WHERE result IN ('win','loss') AND user_id NOT IN (SELECT id FROM users WHERE is_test = 1)")->fetch(PDO::FETCH_ASSOC);
     $allSettledStake = (float)$allTradeStats['stakes'];
     $allSettledPayout = (float)$allTradeStats['payouts'];
-    $allOpenTradeStake = (float)$pdo->query("SELECT COALESCE(SUM(stake),0) FROM trades WHERE result='pending'")->fetchColumn();
+    $allOpenTradeStake = (float)$pdo->query("SELECT COALESCE(SUM(stake),0) FROM trades WHERE result='pending' AND user_id NOT IN (SELECT id FROM users WHERE is_test = 1)")->fetchColumn();
 
     // Always show every pending withdrawal, regardless of date filter, so requests are not hidden.
     $pendingQueue = $pdo->query("SELECT w.id, w.user_id, u.username, w.amount, w.payout_phone, w.created_at FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE w.status='pending' ORDER BY w.created_at ASC LIMIT 200")->fetchAll(PDO::FETCH_ASSOC);
@@ -293,7 +294,7 @@ try {
     $depositTxWhere = adminDateFilter('d.created_at', $period, $from, $to, $txParams);
     $withdrawalTxParams = [];
     $withdrawalTxWhere = adminDateFilter('w.created_at', $period, $from, $to, $withdrawalTxParams);
-    $recentSql = "SELECT * FROM (SELECT 'Deposit' AS kind, u.username, d.amount, d.status, d.created_at, d.reference, NULL AS phone FROM deposits d JOIN users u ON u.id=d.user_id WHERE $depositTxWhere UNION ALL SELECT 'Withdrawal' AS kind, u.username, w.amount, w.status, w.created_at, w.payment_reference AS reference, w.payout_phone AS phone FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE $withdrawalTxWhere) tx ORDER BY created_at DESC LIMIT 100";
+    $recentSql = "SELECT * FROM (SELECT 'Deposit' AS kind, u.username, d.amount, d.status, d.created_at, d.reference, NULL AS phone FROM deposits d JOIN users u ON u.id=d.user_id WHERE u.is_test = 0 AND $depositTxWhere UNION ALL SELECT 'Withdrawal' AS kind, u.username, w.amount, w.status, w.created_at, w.payment_reference AS reference, w.payout_phone AS phone FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE u.is_test = 0 AND $withdrawalTxWhere) tx ORDER BY created_at DESC LIMIT 100";
     $stmt = $pdo->prepare($recentSql);
     $stmt->execute(array_merge($txParams, $withdrawalTxParams));
     $recentTransactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
