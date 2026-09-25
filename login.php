@@ -28,6 +28,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['user_id']  = $user['id'];
                     $_SESSION['username'] = $user['username'];
                     session_regenerate_id(true);
+                    // Save the session before redirecting; otherwise the browser can
+                    // request /trade.php before the login is written to shared storage.
+                    session_write_close();
                     header('Location: /trade.php');
                     exit;
                 }
