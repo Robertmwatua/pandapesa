@@ -541,6 +541,13 @@ body.demo-active .trade-btn-sell{background:linear-gradient(135deg,#7c3aed,#5b21
 @media(max-width:420px){
   .header-right .btn-ghost,.header-right .btn-green{padding:5px 9px;font-size:10px}
 }
+  .site-announcement{display:none;position:relative;z-index:50;padding:12px 18px;background:rgba(41,121,255,.12);border-bottom:1px solid rgba(41,121,255,.35);color:var(--text-primary)}
+  .site-announcement.visible{display:block}
+  .site-announcement-inner{max-width:1440px;margin:0 auto;display:flex;align-items:flex-start;gap:10px}
+  .site-announcement-icon{color:#60a5fa;font-size:18px;line-height:1.2;flex-shrink:0}
+  .site-announcement-title{font-weight:700;font-size:13px;color:#93c5fd;margin-bottom:2px}
+  .site-announcement-message{font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+  body.light-mode .site-announcement{background:#eff6ff;border-color:#bfdbfe;color:#1e293b}
 </style>
 </head>
 <body>
@@ -594,6 +601,16 @@ body.demo-active .trade-btn-sell{background:linear-gradient(135deg,#7c3aed,#5b21
     <a href="/register.php" class="btn-sm btn-green">Sign Up</a>
     <?php endif; ?>
       </div>
+</div>
+
+<div class="site-announcement" id="siteAnnouncement" role="status" aria-live="polite">
+  <div class="site-announcement-inner">
+    <span class="site-announcement-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <div class="site-announcement-title" id="siteAnnouncementTitle"></div>
+      <div class="site-announcement-message" id="siteAnnouncementMessage"></div>
+    </div>
+  </div>
 </div>
 
 <!-- MAIN -->
@@ -2154,7 +2171,7 @@ async function submitWithdrawal(){
       closeWithdraw();
       showHeroToast(
         'Withdrawal of KES ' + amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' submitted',
-        'Processing payment to ' + payoutPhone,
+        'Estimated M-Pesa processing time: 1–6 hours. Payment to ' + payoutPhone,
         4000
       );
     } else {
@@ -2238,6 +2255,29 @@ function toggleTheme(){
 }
 
 // ═══════════════════════════════════════════
+// Site-wide admin announcement. Poll so users already on the page see new broadcasts.
+let displayedAnnouncementId = null;
+async function refreshSiteAnnouncement(){
+  try{
+    const response = await fetch('/api/announcement.php', {cache:'no-store'});
+    if(!response.ok) return;
+    const data = await response.json();
+    const announcement = data.announcement;
+    const banner = document.getElementById('siteAnnouncement');
+    if(!announcement){
+      banner.classList.remove('visible');
+      displayedAnnouncementId = null;
+      return;
+    }
+    document.getElementById('siteAnnouncementTitle').textContent = announcement.title || 'Announcement';
+    document.getElementById('siteAnnouncementMessage').textContent = announcement.message || '';
+    banner.classList.add('visible');
+    displayedAnnouncementId = announcement.id;
+  }catch(e){ /* announcement polling is best-effort */ }
+}
+refreshSiteAnnouncement();
+setInterval(refreshSiteAnnouncement, 60000);
+
 // MAIN LOOP
 // ═══════════════════════════════════════════
 function tick(){prices.push(nextP());if(prices.length>CFG.MAX_PTS)prices.shift();draw();updateHUD();if(activeTrade){updateActiveButton();updateAutosellHud();}}
