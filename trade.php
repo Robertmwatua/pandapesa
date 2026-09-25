@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once __DIR__ . '/api/session.php';
 $user = null;
 if (isset($_SESSION['user_id'])) {
     require_once __DIR__ . '/api/db.php';
